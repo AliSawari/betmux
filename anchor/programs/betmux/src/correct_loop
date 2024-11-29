@@ -1,0 +1,50 @@
+pub fn resolve_bet(ctx: Context<ResolveBet>) -> Result<()> {
+    let betting_event = &mut ctx.accounts.betting_event;
+
+    // Generate a new simulated price
+    let new_price = rand::thread_rng().gen_range(RANGE);
+    let outcome = new_price > betting_event.simulated_price; // True if up, False if down
+    betting_event.outcome = Some(outcome);
+
+    // Ensure there are enough remaining accounts for all participants
+    if betting_event.participants.len() > ctx.remaining_accounts.len() {
+        return Err(ProgramError::NotEnoughAccountKeys.into());
+    }
+
+    // Loop through participants and match them with remaining accounts
+    for (i, participant) in betting_event.participants.iter().enumerate() {
+        // Fetch the account info
+        let account_info = ctx.remaining_accounts.get(i).ok_or(ProgramError::InvalidAccountData)?;
+
+        // Verify the account is for the current participant
+        if account_info.key != participant {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+
+        // Parse the bet account manually
+        let bet = Bet::try_deserialize(&mut &account_info.data.borrow()[..])?;
+
+        // Check if the bet belongs to this event and matches the participant
+        if bet.event_id != betting_event.event_id || bet.user_account != *participant {
+            return Err(ProgramError::InvalidAccountData.into());
+        }
+
+        // Check if the prediction was correct
+        if bet.prediction == outcome {
+            // Reward the winner
+            invoke(
+                &system_instruction::transfer(
+                    betting_event.to_account_info().key,
+                    &bet.user_account,
+                    bet.amount * 2, // Winner gets double their bet
+                ),
+                &[
+                    betting_event.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+            )?;
+        }
+    }
+
+    Ok(())
+}
